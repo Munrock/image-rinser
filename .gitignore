@@ -1,6 +1,8 @@
 *.jpg
 *.jpeg
 *.png
+*.pdf
+*.txt
 API_KEY.txt
 node_modules
 
