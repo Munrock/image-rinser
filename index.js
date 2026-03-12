@@ -55,7 +55,13 @@ async function imageToBase64(filePath) {
   return `data:image/${mime};base64,${data.toString("base64")}`;
 }
 
-async function callOpenRouter(apiKey, model, prompt, base64Image) {
+async function callOpenRouter(
+  apiKey,
+  model,
+  prompt,
+  base64Image,
+  modalities = ["image", "text"],
+) {
   const response = await fetch(
     "https://openrouter.ai/api/v1/chat/completions",
     {
@@ -68,6 +74,7 @@ async function callOpenRouter(apiKey, model, prompt, base64Image) {
       },
       body: JSON.stringify({
         model: model,
+        modalities: modalities,
         messages: [
           {
             role: "user",
@@ -82,21 +89,33 @@ async function callOpenRouter(apiKey, model, prompt, base64Image) {
   );
 
   if (!response.ok) {
-    throw new Error(`API returned ${response.status}`);
+    let errorText = await response.text();
+    throw new Error(`API returned ${response.status}: ${errorText}`);
   }
 
   const json = await response.json();
-  return json.choices[0].message.content;
+  return json.choices[0].message;
 }
 
-function extractImageUrl(content) {
+function extractImageUrl(message) {
+  if (!message) return null;
+
+  // Check OpenRouter's official standard images array
+  if (message.images && message.images.length > 0) {
+    if (message.images[0].image_url && message.images[0].image_url.url) {
+      return message.images[0].image_url.url;
+    }
+  }
+
+  const content = message.content;
   if (!content) return null;
-  // Check if it's raw base64 string directly
+
+  // Check if it's raw base64 string directly in content
   if (content.startsWith("iVBORw0KGgo"))
     return `data:image/png;base64,${content}`;
   if (content.startsWith("/9j/")) return `data:image/jpeg;base64,${content}`;
 
-  // OpenRouter image generation models often return markdown images or raw URLs
+  // OpenRouter image generation models sometimes return markdown images or raw URLs
   const markdownMatch = content.match(
     /!\[.*?\]\((https?:\/\/[^\s)]+|data:image[^\s)]+)\)/,
   );
@@ -138,6 +157,7 @@ async function processImage(file, apiKey, promptText) {
       "bytedance-seed/seedream-4.5",
       promptText,
       base64Image,
+      ["image"],
     );
     const imageUrl = extractImageUrl(content);
     if (imageUrl) {
@@ -156,9 +176,10 @@ async function processImage(file, apiKey, promptText) {
     console.log(`  - Calling Gemini...`);
     const content = await callOpenRouter(
       apiKey,
-      "google/gemini-3.1-flash-image-preview",
+      "google/gemini-3-pro-image-preview",
       promptText,
       base64Image,
+      ["image", "text"],
     );
     const imageUrl = extractImageUrl(content);
     if (imageUrl) {
