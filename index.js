@@ -128,16 +128,30 @@ function extractImageUrl(message) {
 }
 
 async function downloadAndSaveImage(urlOrBase64, savePath) {
+  let buffer;
   if (urlOrBase64.startsWith("data:image")) {
     const base64Data = urlOrBase64.split(",")[1];
-    await fs.writeFile(savePath, Buffer.from(base64Data, "base64"));
-    return;
+    buffer = Buffer.from(base64Data, "base64");
+  } else {
+    const response = await fetch(urlOrBase64);
+    if (!response.ok)
+      throw new Error("Failed to download image from result URL");
+    buffer = Buffer.from(await response.arrayBuffer());
   }
 
-  const response = await fetch(urlOrBase64);
-  if (!response.ok) throw new Error("Failed to download image from result URL");
-  const buffer = await response.arrayBuffer();
-  await fs.writeFile(savePath, Buffer.from(buffer));
+  // Detect image type using magic bytes
+  let ext = path.extname(savePath);
+  if (buffer[0] === 0x89 && buffer[1] === 0x50) {
+    ext = ".png";
+  } else if (buffer[0] === 0xff && buffer[1] === 0xd8) {
+    ext = ".jpg";
+  }
+
+  // Construct the new path with the correct format extension
+  const parsedPath = path.parse(savePath);
+  const finalPath = path.format({ ...parsedPath, base: undefined, ext });
+
+  await fs.writeFile(finalPath, buffer);
 }
 
 async function processImage(file, apiKey, promptText) {

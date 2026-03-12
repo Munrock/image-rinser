@@ -57,12 +57,18 @@ async function main() {
     const imageBytes = fs.readFileSync(fileObj.source);
     let image;
     try {
-      if (fileObj.name.toLowerCase().endsWith(".png")) {
+      // Check magic bytes to reliably determine image type instead of extension
+      const isPng = imageBytes[0] === 0x89 && imageBytes[1] === 0x50;
+      const isJpg = imageBytes[0] === 0xff && imageBytes[1] === 0xd8;
+
+      if (isPng) {
         image = await pdfDoc.embedPng(imageBytes);
-      } else if (fileObj.name.toLowerCase().match(/\.(jpg|jpeg)$/)) {
+      } else if (isJpg) {
         image = await pdfDoc.embedJpg(imageBytes);
       } else {
-        console.warn(`Skipping unsupported file format: ${fileObj.name}`);
+        console.warn(
+          `Skipping unknown or unsupported file format: ${fileObj.name}`,
+        );
         continue;
       }
     } catch (err) {
@@ -70,7 +76,8 @@ async function main() {
       continue;
     }
 
-    const page = pdfDoc.addPage(PageSizes.A4);
+    // A4 landscape is [841.89, 595.28]
+    const page = pdfDoc.addPage([PageSizes.A4[1], PageSizes.A4[0]]);
     const { width, height } = page.getSize();
 
     page.drawImage(image, {
