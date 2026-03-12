@@ -7,10 +7,10 @@ async function main() {
   const seedreamDir = path.join("outbox", "seedream");
 
   const geminiFiles = fs.existsSync(geminiDir)
-    ? fs.readdirSync(geminiDir).filter((f) => !f.startsWith("."))
+    ? fs.readdirSync(geminiDir).filter((f) => !f.startsWith(".") && fs.statSync(path.join(geminiDir, f)).isFile())
     : [];
   const seedreamFiles = fs.existsSync(seedreamDir)
-    ? fs.readdirSync(seedreamDir).filter((f) => !f.startsWith("."))
+    ? fs.readdirSync(seedreamDir).filter((f) => !f.startsWith(".") && fs.statSync(path.join(seedreamDir, f)).isFile())
     : [];
 
   const duplicateNames = geminiFiles.filter((item) =>
