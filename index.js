@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 
 const INBOX_DIR = "inbox/images";
+const INBOX_PROMPTS = "inbox/prompts";
 const INBOX_FAILURES = "inbox/failures";
 const OUTBOX_SEEDREAM = "outbox/seedream";
 const OUTBOX_GEMINI = "outbox/gemini";
@@ -9,6 +10,7 @@ const OUTBOX_ORIGINAL = "outbox/original";
 
 const DIRS = [
   INBOX_DIR,
+  INBOX_PROMPTS,
   INBOX_FAILURES,
   OUTBOX_SEEDREAM,
   OUTBOX_GEMINI,
@@ -62,6 +64,11 @@ async function callOpenRouter(
   base64Image,
   modalities = ["image", "text"],
 ) {
+  const content = [{ type: "text", text: prompt }];
+  if (base64Image) {
+    content.push({ type: "image_url", image_url: { url: base64Image } });
+  }
+
   const response = await fetch(
     "https://openrouter.ai/api/v1/chat/completions",
     {
@@ -78,10 +85,7 @@ async function callOpenRouter(
         messages: [
           {
             role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: base64Image } },
-            ],
+            content: content,
           },
         ],
       }),
@@ -217,27 +221,140 @@ async function processImage(file, apiKey, promptText) {
   }
 }
 
+async function processTextPrompt(file, apiKey) {
+  const filePath = path.join(INBOX_PROMPTS, file);
+  console.log(`\nProcessing text prompt: ${file}`);
+
+  let promptText;
+  try {
+    promptText = await fs.readFile(filePath, "utf-8");
+  } catch (e) {
+    console.error(`  - Failed to read text prompt: ${e.message}`);
+    return;
+  }
+
+  let seedreamSuccess = false;
+  let geminiSuccess = false;
+
+  const baseFileName = path.parse(file).name;
+  // We don't have an extension for the generated image yet, `downloadAndSaveImage` will figure it out
+  // and append .png/.jpg. We will save it with .png default, and it will rewrite extension.
+  const tempSaveName = baseFileName + ".png";
+
+  // Process Seedream
+  try {
+    console.log(`  - Calling Seedream...`);
+    const content = await callOpenRouter(
+      apiKey,
+      "bytedance-seed/seedream-4.5",
+      promptText,
+      null,
+      ["image"],
+    );
+    const imageUrl = extractImageUrl(content);
+    if (imageUrl) {
+      await downloadAndSaveImage(
+        imageUrl,
+        path.join(OUTBOX_SEEDREAM, tempSaveName),
+      );
+      seedreamSuccess = true;
+      console.log(`  - Seedream success`);
+    } else {
+      console.log(`  - Seedream returned non-image response`);
+    }
+  } catch (e) {
+    console.error(`  - Seedream failed: ${e.message}`);
+  }
+
+  // Process Gemini
+  try {
+    console.log(`  - Calling Gemini...`);
+    const content = await callOpenRouter(
+      apiKey,
+      "google/gemini-3-pro-image-preview",
+      promptText,
+      null,
+      ["image", "text"],
+    );
+    const imageUrl = extractImageUrl(content);
+    if (imageUrl) {
+      await downloadAndSaveImage(
+        imageUrl,
+        path.join(OUTBOX_GEMINI, tempSaveName),
+      );
+      geminiSuccess = true;
+      console.log(`  - Gemini success`);
+    } else {
+      console.log(`  - Gemini returned non-image response`);
+    }
+  } catch (e) {
+    console.error(`  - Gemini failed: ${e.message}`);
+  }
+
+  // Move original
+  if (seedreamSuccess || geminiSuccess) {
+    await fs.rename(filePath, path.join(OUTBOX_ORIGINAL, file));
+    console.log(`  -> Moved to outbox/original`);
+  } else {
+    await fs.rename(filePath, path.join(INBOX_FAILURES, file));
+    console.log(`  -> Both failed, moved to inbox/failures`);
+  }
+}
+
 async function main() {
   await setupDirectories();
 
   const apiKey = await getApiKey();
-  const promptText = await getPrompt();
+  let promptText = "";
+  try {
+    promptText = await getPrompt();
+  } catch (e) {
+    console.log(
+      "No inbox/prompt.md found, image to image generation won't have a base prompt.",
+    );
+  }
 
-  const files = await fs.readdir(INBOX_DIR);
+  let files = [];
+  try {
+    files = await fs.readdir(INBOX_DIR);
+  } catch (e) {
+    // Ignore if dir doesn't exist
+  }
   const images = files.filter((f) => !f.toLowerCase().endsWith(".md"));
 
-  if (images.length === 0) {
-    console.log("No images found in inbox/images");
+  if (images.length > 0 && promptText) {
+    console.log(`Found ${images.length} images to process.`);
+    for (const image of images) {
+      await processImage(image, apiKey, promptText);
+    }
+  } else if (images.length > 0 && !promptText) {
+    console.log(
+      `Found ${images.length} images to process, but no inbox/prompt.md provided.`,
+    );
+  }
+
+  let prompts = [];
+  try {
+    prompts = await fs.readdir(INBOX_PROMPTS);
+  } catch (e) {
+    // Ignore if dir doesn't exist
+  }
+
+  const textPrompts = prompts.filter((f) => f.toLowerCase().endsWith(".txt"));
+
+  if (textPrompts.length > 0) {
+    console.log(`\nFound ${textPrompts.length} text prompts to process.`);
+    for (const textPrompt of textPrompts) {
+      await processTextPrompt(textPrompt, apiKey);
+    }
+  }
+
+  if (images.length === 0 && textPrompts.length === 0) {
+    console.log("No images or text prompts found to process.");
     return;
   }
 
-  console.log(`Found ${images.length} images to process.`);
-
-  for (const image of images) {
-    await processImage(image, apiKey, promptText);
-  }
-
-  console.log("\nAll images processed.");
+  console.log("\nAll items processed.");
 }
 
 main().catch(console.error);
